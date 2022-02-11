@@ -13,7 +13,7 @@ Here is a list of files that YOU will need to generate prior to the running the 
   
 Example:
 
-      opennsa-config
+      config
         ├── certs
         │   └── ca.cert
         ├── csf-mx.nrm
