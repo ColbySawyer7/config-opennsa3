@@ -1,0 +1,258 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import socket
+
+from twisted.python import log, usage
+from twisted.internet import reactor, defer
+
+from opennsa import nsa
+from opennsa.cli import options, parser, commands, logobserver
+
+
+CLI_TIMEOUT             = 130 # The default 2-PC timeout for nsi is 120 seconds, so just add a bit to that
+
+CLI_DEFAULTS            = '.opennsa-cli'
+REQUESTER_URL_BASE      = '{}://{}:{}/NSI/services/ConnectionService'
+HELP_MESSAGE            = '{}: Try --help or <command> --help for usage details.'
+
+
+def getHostname(dst_nsa):
+    """
+    Figure out the hostname of this machine
+
+    Unfortunately socket.getfqdn() is not a reliable way of getting the actual
+    fqdn used for the destination we are trying to reach. The best way to do
+    that is to open a socket towards the destination and then request the fqdn. 
+    """
+    dsthost,dstport = dst_nsa.getHostPort()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect((dsthost,dstport))
+    hostname = s.getsockname()[0]
+    s.close()
+    return hostname
+
+
+@defer.inlineCallbacks
+def doMain():
+    config = parser.Options()
+    try:
+        config.parseOptions()
+    except usage.UsageError as errortext:
+        print('{}: {}'.format(sys.argv[0], errortext))
+        print(HELP_MESSAGE.format(sys.argv[0]))
+        return
+
+    # User did not enter a command.
+    if not hasattr(config, "subOptions"):
+        print(HELP_MESSAGE.format(sys.argv[0]))
+        return
+
+    observer = logobserver.SimpleObserver(sys.stdout)
+    log.startLoggingWithObserver(observer.emit)
+
+    if config.subOptions[options.VERBOSE]:
+        observer.debug = True
+    if config.subOptions[options.DUMP_PAYLOAD]:
+        observer.dump_payload = True
+
+    # read defaults
+    defaults_file = config.subOptions[options.DEFAULTS_FILE] or os.path.join( os.path.expanduser('~'), CLI_DEFAULTS )
+    if os.path.exists(defaults_file):
+        defaults = options.readDefaults( open(defaults_file) )
+    else:
+        defaults = {}
+
+    log.msg('Defaults:', debug=True)
+    for k,v in defaults.items():
+        log.msg(' %s : %s' % (k,v), debug=True)
+
+    iport = None
+
+    # commands
+
+    # network commands, listener port created in this block
+    # note: we currently only have network commands, but they may change in the future
+    if config.subCommand in ['reserve', 'reserveonly', 'reservecommit', 'reserveprovision', 'rprt', 'provision', 'release', 'terminate', 'query', 'queryrec']:
+
+        if options.NSA_SHORTHAND in defaults and config.subOptions[options.PROVIDER] in defaults[options.NSA_SHORTHAND]:
+            ns = defaults[options.NSA_SHORTHAND][config.subOptions[options.PROVIDER]]
+            provider_nsa = ns[0]
+            service_url  = ns[1]
+        else:
+            provider_nsa    = config.subOptions[options.PROVIDER]       or defaults.get(options.PROVIDER)
+            service_url     = config.subOptions[options.SERVICE_URL]    or defaults.get(options.SERVICE_URL)
+
+        requester_nsa   = config.subOptions[options.REQUESTER]      or defaults.get(options.REQUESTER)      or 'OpenNSA-CLI'
+
+        authz_header    = config.subOptions[options.AUTHZ_HEADER]   or defaults.get(options.AUTHZ_HEADER)
+
+        connection_id   = config.subOptions[options.CONNECTION_ID]  or defaults.get(options.CONNECTION_ID)
+        global_id       = config.subOptions[options.GLOBAL_ID]      or defaults.get(options.GLOBAL_ID)
+
+        # can only be specified on command line for now
+        security_attributes = [ nsa.SecurityAttribute(type_, value) for type_, value in config.subOptions[options.SECURITY_ATTRIBUTES] ]
+
+        if service_url is None:
+            raise usage.UsageError('Service URL not specified')
+        if provider_nsa is None:
+            raise usage.UsageError('ProviderNSA not specified')
+
+        provider_nsa    = nsa.NetworkServiceAgent(provider_nsa, service_url)
+
+        tls             = config.subOptions[options.TLS] or defaults.get(options.TLS) or False
+        scheme          = 'https' if tls else 'http'
+        host            = config.subOptions[options.HOST]           or defaults.get(options.HOST)   or getHostname(provider_nsa)
+        port            = config.subOptions[options.PORT]           or defaults.get(options.PORT)   or (7443 if tls else 7080)
+
+        requester_url   = REQUESTER_URL_BASE.format(scheme, host, port)
+        client_nsa      = nsa.NetworkServiceAgent(requester_nsa, requester_url)
+
+        log.msg("Requester URL: %s" % requester_url, debug=True)
+
+        nsi_header = nsa.NSIHeader(client_nsa.urn(), provider_nsa.urn(), reply_to=provider_nsa.endpoint, security_attributes=security_attributes)
+
+        # setup ssl context
+        public_key          = config.subOptions[options.CERTIFICATE]        or defaults.get(options.CERTIFICATE)
+        private_key         = config.subOptions[options.KEY]                or defaults.get(options.KEY)
+        certificate_dir     = config.subOptions[options.CERTIFICATE_DIR]    or defaults.get(options.CERTIFICATE_DIR)
+        # verify cert is a flag, if it is set, it means it should be skipped
+        if config.subOptions[options.NO_VERIFY_CERT]:
+            verify_cert = False
+        else:
+            verify_cert = defaults.get(options.NO_VERIFY_CERT)
+            # if we don't get a value from defaults set it to true (default)
+            if verify_cert is None:
+                verify_cert = True
+
+        ctx_factory = None
+        if public_key or private_key or certificate_dir:
+
+            if public_key == '.' and private_key == '.':
+                from opennsa import ctxfactory
+                ctx_factory = ctxfactory.RequestContextFactory(certificate_dir, verify_cert)
+            elif public_key and private_key and certificate_dir:
+                from opennsa import ctxfactory
+                ctx_factory = ctxfactory.ContextFactory(private_key, public_key, certificate_dir, verify_cert)
+            elif tls:
+                if not public_key:
+                    raise usage.UsageError('Cannot setup TLS. No public key defined')
+                if not private_key:
+                    raise usage.UsageError('Cannot setup TLS. No private key defined')
+                if not certificate_dir:
+                    raise usage.UsageError('Cannot setup TLS. No certificate directory defined')
+            else:
+                log.msg('Missing options for creating SSL/TLS context: Cannot create SSL/TLS context.')
+
+        if tls and not ctx_factory:
+            raise usage.UsageError('Options for TLS/SSL context not defined. Cannot setup TLS.')
+
+        # options only required for commands
+
+        if config.subCommand in ('reserveprovision', 'provision', 'release'):
+            notification_wait = config.subOptions[options.NOTIFICATION_WAIT] or False
+
+        if config.subCommand in ('reserve', 'reserveonly', 'reserveprovision', 'rprt'):
+
+            source_stp = config.subOptions[options.SOURCE_STP]  or defaults.get(options.SOURCE_STP)
+            dest_stp   = config.subOptions[options.DEST_STP]    or defaults.get(options.DEST_STP)
+            if source_stp is None:
+                raise usage.UsageError('Source STP is not defined')
+            if dest_stp is None:
+                raise usage.UsageError('Dest STP is not defined')
+
+            start_time  = config.subOptions[options.START_TIME] or defaults.get(options.START_TIME)
+            end_time    = config.subOptions[options.END_TIME]   or defaults.get(options.END_TIME)
+
+            bandwidth = config.subOptions[options.BANDWIDTH] or defaults.get(options.BANDWIDTH)
+            if bandwidth is None:
+                raise usage.UsageError('Bandwidth is not defined')
+
+            ero = config.subOptions[options.ERO] or None
+
+        if config.subCommand in ('provision', 'release', 'terminate') and connection_id is None:
+            raise usage.UsageError('Connection ID is not defined')
+
+        from opennsa.protocols import nsi2
+        client, factory = nsi2.createRequester(host, port, service_url, tls=tls, ctx_factory=ctx_factory, authz_header=authz_header, callback_timeout=CLI_TIMEOUT)
+
+        # setup listener port
+        if tls:
+            iport = reactor.listenSSL(port, factory, ctx_factory)
+        else:
+            iport = reactor.listenTCP(port, factory)
+
+
+    # start over on commands, now we do the actual dispatch
+
+    if config.subCommand == 'reserve':
+        yield commands.reserve(client, nsi_header, source_stp, dest_stp, start_time, end_time, bandwidth, ero, connection_id, global_id)
+
+    elif config.subCommand == 'reserveonly':
+        yield commands.reserveonly(client, nsi_header, source_stp, dest_stp, start_time, end_time, bandwidth, ero, connection_id, global_id)
+
+    elif config.subCommand == 'reserveprovision':
+        yield commands.reserveprovision(client, nsi_header, source_stp, dest_stp, start_time, end_time, bandwidth, ero, connection_id, global_id, notification_wait)
+
+    elif config.subCommand == 'rprt':
+        yield commands.rprt(client, nsi_header, source_stp, dest_stp, start_time, end_time, bandwidth, ero, connection_id, global_id)
+
+    elif config.subCommand == 'reservecommit':
+        yield commands.reservecommit(client, nsi_header, connection_id)
+
+    elif config.subCommand == 'provision':
+        yield commands.provision(client, nsi_header, connection_id, notification_wait)
+
+    elif config.subCommand == 'release':
+        yield commands.release(client, nsi_header, connection_id, notification_wait)
+
+    elif config.subCommand == 'terminate':
+        yield commands.terminate(client, nsi_header, connection_id)
+
+    elif config.subCommand == 'query':
+        connection_ids  = [ connection_id   ] if connection_id  else None
+        global_ids      = [ global_id       ] if global_id      else None
+        yield commands.querySummary(client, nsi_header, connection_ids, global_ids)
+
+    elif config.subCommand == 'queryrec':
+        connection_ids  = [ connection_id   ] if connection_id  else None
+        global_ids      = [ global_id       ] if global_id      else None
+        yield commands.queryRecursive(client, nsi_header, connection_ids, global_ids)
+
+    else:
+        print('Invalid subcommand specified')
+        print('{}: Try --help for usage details.'.format(sys.argv[0]))
+
+
+    if iport:
+        yield iport.stopListening()
+
+
+
+def main():
+
+    def slightlyDelayedShutdown(_):
+        # this means that the reactor/kernel will have a bit of time
+        # to push off any replies/acks before shutdown
+        reactor.callLater(0.1, reactor.stop)
+
+    def printError(error):
+        if error.type == SystemExit:
+            return
+        elif error.type == usage.UsageError:
+            log.msg("Usage error: " + error.getErrorMessage())
+        else:
+            #print "Error: %s" % error.value
+            log.err(error)
+
+    d = defer.maybeDeferred(doMain)
+    d.addErrback(printError)
+    d.addBoth(slightlyDelayedShutdown)
+    return d
+
+
+if __name__ == '__main__':
+    reactor.callWhenRunning(main)
+    reactor.run()
+
