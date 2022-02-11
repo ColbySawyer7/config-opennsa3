@@ -13,7 +13,7 @@ services:
 
 
   opennsa:
-    image: colbysawer17/opennsa3:latest
+    image: colbysawyer17/opennsa3:latest
     depends_on:
       - opennsa-db
       - waitforpg
