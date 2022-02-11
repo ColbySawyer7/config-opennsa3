@@ -24,7 +24,7 @@ services:
       - opennsa-db
     volumes:
       - ${OPENNSA_CONF_LOC}:/home/opennsa/opennsa/config:ro
-      - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa.tac:ro
+      - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa-docker3.tac:ro
 
 
   waitforpg:
