@@ -3,20 +3,27 @@ version: '3'
 services:
   opennsa-db:
     image: postgres:9.6.5
+    restart: always
     volumes:
       - ${SCHEMA_FILE}:/docker-entrypoint-initdb.d/schema.sql:ro
-      - opennsa-pgdata:/var/lib/postgresql/data
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-q", "-d", "postgres", "-U", "opennsa" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    ports:
+      - 127.0.0.1:5432:5432
 
 
   opennsa:
     image: colbysawyer17/opennsa3:latest
     depends_on:
-      - opennsa-db
-      - waitforpg
+      opennsa-db:
+        condition: service_healthy
     ports:
       - 127.0.0.1:9080:9080
       - 127.0.0.1:9443:9443
@@ -26,14 +33,5 @@ services:
       - ${OPENNSA_CONF_LOC}:/home/opennsa/opennsa/config:ro
       - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa-docker3.tac:ro
 
-
-  waitforpg:
-    image: dadarek/wait-for-dependencies
-    depends_on:
-      - opennsa-db
-    command: opennsa-db:5432
-
-volumes:
-  opennsa-pgdata:
 
 
