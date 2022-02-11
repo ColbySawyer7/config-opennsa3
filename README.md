@@ -29,14 +29,14 @@ Example:
 As OpenNSA requires a Postgres database, docker-compose is used to coordinate
 the setup of the two containers.
 
-1. Make sure opennsa.conf and opennsa.nrm are in the config dir
+1. Make sure the config dir is correct
    Leave the database config as-is.
 
-2. $ ./create-compose
+2. $ . create-compose
    This will substitute stuff in the templates and create docker-compose.yml
 
-3. $ docker-compose up
-   This should bring up a PostgreSQL instance and OpenNSA.
+3. $ docker-compose -p "OpenNSA" up
+   This should bring up a PostgreSQL instance and OpenNSA. The entire stack will be named "OpenNSA"
 
 
 You may have to edit template.yml to expose OpenNSA ports publicly, mount in
