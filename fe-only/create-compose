@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -a # load source environment variables into scope
+
+. env.sh
+
+cat template.yml | envsubst > docker-compose.yml
+
+echo "Start OpenNSA with: docker-compose up"
