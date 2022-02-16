@@ -3,14 +3,9 @@ version: '3'
 services:
   opennsa:
     image: colbysawyer17/opennsa3:latest
-    depends_on:
-      opennsa-db:
-        condition: service_healthy
     ports:
       - 127.0.0.1:9080:9080
       - 127.0.0.1:9443:9443
-    links:
-      - opennsa-db
     volumes:
       - ${OPENNSA_CONF_LOC}:/home/opennsa/opennsa/config:ro
       - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa-docker3.tac:ro
