@@ -15,8 +15,7 @@ services:
       timeout: 45s
       interval: 10s
       retries: 10
-    ports:
-      - 127.0.0.1:5432:5432
+    network_mode: "host"
 
 
   opennsa:
@@ -24,14 +23,12 @@ services:
     depends_on:
       opennsa-db:
         condition: service_healthy
-    ports:
-      - 127.0.0.1:9080:9080
-      - 127.0.0.1:9443:9443
+    network_mode: "host"
     links:
       - opennsa-db
     volumes:
-      - ${OPENNSA_CONF_LOC}:/home/opennsa/opennsa/config:ro
-      - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa-docker3.tac:ro
+      - ${OPENNSA_CONF_LOC}:/home/opennsa/opennsa3/config:ro
+      - ${OPENNSA_TAC_LOC}:/home/opennsa/opennsa3/opennsa-docker3.tac:ro
 
 
 

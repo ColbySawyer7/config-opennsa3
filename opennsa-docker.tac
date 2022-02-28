@@ -9,4 +9,4 @@
 from opennsa import setup
 
 # you can get debug and/or payload info in the log by setting one of the flags to true
-application = setup.createApplication('/home/opennsa/opennsa/config/opennsa.conf', payload=False, debug=True)
+application = setup.createApplication('/home/opennsa/opennsa3/config/opennsa.conf', payload=False, debug=True)
